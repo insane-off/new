@@ -1,0 +1,38 @@
+if ( LagRecord.m_SimulationTime - ( LagRecord.m_AnimationLayers.at( ANIMATION_LAYER_MOVEMENT_JUMP_OR_FALL ).m_flCycle / LagRecord.m_AnimationLayers.at( ANIMATION_LAYER_MOVEMENT_JUMP_OR_FALL ).m_flPlaybackRate )
+		>= pPlayer->m_flOldSimulationTime( ) )
+		LagRecord.m_Flags |= FL_ONGROUND;
+	
+	float_t flWeight = ( 1.0f - LagRecord.m_AnimationLayers.at( 11 ).m_flWeight ) / 2.8571432;
+	if ( flWeight > 0.0f )
+	{
+		float_t flSpeed = ( flWeight + 0.55f ) * pPlayer->GetMaxPlayerSpeed( );
+		if ( flSpeed > 0.0f && LagRecord.m_Velocity.Length( ) > 0.0f )
+			LagRecord.m_Velocity /= LagRecord.m_Velocity.Length( ) / flSpeed;
+	}
+	else if ( !( LagRecord.m_Flags & FL_ONGROUND ) )
+	{
+		float_t flCurrentVelocityDirection = Math::NormalizeAngle( RAD2DEG( atan2( LagRecord.m_Velocity.x, LagRecord.m_Velocity.y ) ) );
+		float_t flPreviousVelocityDirection = Math::NormalizeAngle( RAD2DEG( atan2( g_PlayerData[ pPlayer->EntIndex( ) ].m_PreviousRecord.m_Velocity.x, g_PlayerData[ pPlayer->EntIndex( ) ].m_PreviousRecord.m_Velocity.y ) ) );
+		float_t flAverageVelocityDirection = DEG2RAD( Math::NormalizeAngle( flCurrentVelocityDirection + ( ( flCurrentVelocityDirection - flPreviousVelocityDirection ) * 0.5f ) ) );
+
+		float_t flDirectionCos = cos( flAverageVelocityDirection );
+		float_t flDirectionSin = sin( flAverageVelocityDirection );
+
+		if ( LagRecord.m_Velocity.Length2D( ) > 0.0f )
+		{
+			LagRecord.m_Velocity.x /= LagRecord.m_Velocity.Length2D( );
+			LagRecord.m_Velocity.y /= LagRecord.m_Velocity.Length2D( );
+		}
+
+		if ( flDirectionCos > 0.0f )
+			LagRecord.m_Velocity.x *= flDirectionCos;
+
+		if ( flDirectionSin > 0.0f )
+			LagRecord.m_Velocity.y *= flDirectionSin;
+
+		LagRecord.m_Velocity.z -= g_Globals.m_ConVars.m_SvGravity->GetFloat( ) * TICKS_TO_TIME( LagRecord.m_ChokedTicks ) * 0.5f;
+	}
+
+	LagRecord.m_DuckAmount = pPlayer->m_flDuckAmount( );
+	if ( g_PlayerData[ pPlayer->EntIndex( ) ].m_bHasPreviousRecord )
+		LagRecord.m_DuckPerTick = ( LagRecord.m_DuckAmount - g_PlayerData[ pPlayer->EntIndex( ) ].m_PreviousRecord.m_DuckAmount ) / LagRecord.m_ChokedTicks;
