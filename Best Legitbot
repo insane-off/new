@@ -1,0 +1,122 @@
+class C_LegitHitboxData
+{
+public:
+	float_t flDamage;
+	int32_t iHitboxNumber;
+	Vector vecHitboxPosition;
+};
+
+class C_ScanData
+{
+public:
+	QAngle angAngles;
+	C_BasePlayer* pTarget;
+};
+
+std::array< Vector, 65 > vecBestHitboxPosition;
+std::array< C_LegitHitboxData, HITBOX_MAX > pHitboxData;
+
+void C_LegitBot::CreateMove()
+{
+	if (!g_Globals.m_LocalPlayer->m_hActiveWeapon().Get() || !g_Globals.m_LocalPlayer->m_hActiveWeapon().Get()->GetWeaponData())
+		return;
+
+	if ((g_Globals.m_LocalPlayer->m_fFlags() & FL_FROZEN) || (*g_Globals.m_Interfaces.m_GameRules)->IsFreezePeriod())
+		return;
+
+	if (!g_Globals.m_AccuracyData.m_bCanFire_Default || !g_Globals.m_AccuracyData.m_bCanFire_Shift)
+		return;
+
+	this->SetupPacket();
+
+	C_ScanData cScanData = this->ScanTargets();
+	if (cScanData.pTarget == nullptr || cScanData.angAngles.IsZero())
+		return;
+
+	if ( g_PacketManager->GetModifableCommand()->m_nButtons & IN_ATTACK )
+	{
+		g_PacketManager->GetModifableCommand()->m_nTickCount = TIME_TO_TICKS(cScanData.pTarget->m_flSimulationTime() + g_LagCompensation->GetLerpTime());
+
+		QAngle angRecoilScale = g_Globals.m_ConVars.m_WeaponRecoilScale->GetFloat() * g_Globals.m_LocalPlayer->m_aimPunchAngle();
+		angRecoilScale.pitch *= m_LegitSettings.m_iRecoilX / 100.f; angRecoilScale.yaw *= m_LegitSettings.m_iRecoilY / 100.f;
+
+		if (g_Globals.m_ConVars.m_WeaponRecoilScale->GetFloat() > 0.0f)
+			cScanData.angAngles -= angRecoilScale;
+
+		g_PacketManager->GetModifableCommand()->m_angViewAngles = cScanData.angAngles;
+		g_Globals.m_Interfaces.m_EngineClient->SetViewAngles(&cScanData.angAngles);
+	}
+}
+
+C_BasePlayer* C_LegitBot::GetClosestTarget()
+{
+	float_t flFov = FLT_MAX;
+
+	QAngle angViewangles;
+	g_Globals.m_Interfaces.m_EngineClient->GetViewAngles(&angViewangles);
+
+	for (int iIndex = 1; iIndex < g_Globals.m_Interfaces.m_EngineClient->GetMaxClients(); iIndex++)
+	{
+		C_BasePlayer* pPlayer = C_BasePlayer::GetPlayerByIndex(iIndex);
+		if (!pPlayer || !pPlayer->IsAlive() || !pPlayer->IsPlayer() || pPlayer == g_Globals.m_LocalPlayer || pPlayer->IsDormant() || pPlayer->m_iTeamNum() == g_Globals.m_LocalPlayer->m_iTeamNum())
+			continue;
+
+		QAngle angCalculatedAngles = Math::CalcAngle(g_Globals.m_LocalData.m_vecShootPosition, pPlayer->GetHitboxPosition(HITBOX_HEAD));
+		float_t flTargetFov = Math::GetFov(Vector(angViewangles.pitch, angViewangles.yaw, angViewangles.roll), Vector(angCalculatedAngles.pitch, angCalculatedAngles.yaw, angCalculatedAngles.roll));
+
+		if (flTargetFov < flFov)
+			flFov = flTargetFov;
+
+		return pPlayer;
+	}
+}
+
+C_ScanData C_LegitBot::ScanTargets()
+{
+	C_BasePlayer* pPlayer = GetClosestTarget();
+	if (!pPlayer || !pPlayer->IsAlive())
+		return C_ScanData();
+
+	C_ScanData cScanDataToOut;
+	cScanDataToOut.pTarget = pPlayer;
+	// Eterate all hitboxes, to get damage, number, position
+	for (int iHitbox = 0; iHitbox < HITBOX_MAX; iHitbox++)
+	{
+		Vector vecHitboxPosition = pPlayer->GetHitboxPosition(iHitbox);
+
+		NewAutoWall::pen_argument_t Argument; Argument.m_from = g_Globals.m_LocalPlayer; Argument.m_to = pPlayer; Argument.m_can_penetrate = false; Argument.m_damage = 1.f; Argument.m_damage_penetration = 1.f; Argument.m_pos = vecHitboxPosition; Argument.m_shoot_position = g_Globals.m_LocalData.m_vecShootPosition;
+		NewAutoWall::run_penetration(&Argument);
+
+		pHitboxData.at(iHitbox).flDamage = Argument.m_out_data.m_damage;
+		pHitboxData.at(iHitbox).iHitboxNumber = iHitbox;
+		pHitboxData.at(iHitbox).vecHitboxPosition = vecHitboxPosition;
+	}
+
+	// Eterate all hitboxes again, to get closest hitbox to crosshair
+	float_t flBestDistance = FLT_MAX;
+
+	int32_t x, y;
+	g_Globals.m_Interfaces.m_EngineClient->GetScreenSize(x, y);
+	Vector vecViewangles = Vector(x / 2, y / 2, 0);
+
+	for (int iHitbox = 0; iHitbox < HITBOX_MAX; iHitbox++)
+	{
+		Vector vecHitboxOnScreen;
+		if (!Math::WorldToScreen(pHitboxData.at(iHitbox).vecHitboxPosition, vecHitboxOnScreen) || pHitboxData.at(iHitbox).flDamage < 1)
+			continue;
+
+		float_t flHitboxDistance = (vecViewangles - vecHitboxOnScreen).Length2D();
+		if (flHitboxDistance < flBestDistance)
+		{
+			flBestDistance = flHitboxDistance;
+			vecBestHitboxPosition.at(pPlayer->EntIndex()) = pHitboxData.at(iHitbox).vecHitboxPosition;
+		}
+	}
+
+	if (vecBestHitboxPosition.at(pPlayer->EntIndex()).IsZero())
+		return C_ScanData();
+
+	cScanDataToOut.angAngles = Math::CalcAngle(g_Globals.m_LocalData.m_vecShootPosition, vecBestHitboxPosition.at(pPlayer->EntIndex()));
+
+	return cScanDataToOut;
+}
